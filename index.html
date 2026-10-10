@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>小蜜蜂雷電</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #05070d;
+      color: #f4f1e8;
+      font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+    }
+    body {
+      display: grid;
+      place-items: center;
+      min-height: 100%;
+    }
+    .stage {
+      position: relative;
+      width: min(100vw, calc(100vh * 9 / 16));
+      aspect-ratio: 9 / 16;
+      max-height: 100vh;
+      box-shadow: 0 0 0 1px #243044, 0 24px 80px rgba(0, 0, 0, 0.55);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: #070b14;
+      touch-action: none;
+    }
+    .hud-hint {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 10px;
+      text-align: center;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      color: rgba(244, 241, 232, 0.55);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <canvas id="game" width="540" height="960"></canvas>
+    <div class="hud-hint">方向鍵 / WASD 移動　Shift 精密操作　空白鍵射擊　C 換武器　X 炸彈</div>
+  </div>
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width;
+    const H = canvas.height;
+
+    const STAGES = [
+      { id: "scout", name: "夜航", boss: "斥候蜂", hp: 120, wait: 16, scale: 0.78, sky: ["#070b16", "#12182c", "#1a160f"], glow: "255,176,90", hull: "#241820", plate: "#4a2430", core: "#ff5a6a" },
+      { id: "storm", name: "雷雲", boss: "雷霆艦", hp: 170, wait: 16, scale: 0.96, sky: ["#061018", "#0e2438", "#10202c"], glow: "120,190,255", hull: "#102033", plate: "#1d4e72", core: "#7ecbff" },
+      { id: "frost", name: "冰原", boss: "霜牙", hp: 200, wait: 17, scale: 0.9, sky: ["#07141c", "#163246", "#c5d5df"], glow: "190,235,255", hull: "#163246", plate: "#3d7590", core: "#d7f6ff" },
+      { id: "magma", name: "熔城", boss: "炎龍", hp: 240, wait: 17, scale: 1.04, sky: ["#140806", "#3a140c", "#2a100c"], glow: "255,120,40", hull: "#3a120c", plate: "#8a3418", core: "#ff7a2a" },
+      { id: "queen", name: "王巢", boss: "女皇蜂", hp: 300, wait: 18, scale: 1.12, sky: ["#12060e", "#2a1020", "#1a0c12"], glow: "255,70,100", hull: "#2a0814", plate: "#7a2434", core: "#ff3355" },
+    ];
+    const WEAPONS = [
+      { id: "vulcan", name: "機砲" },
+      { id: "laser", name: "雷射" },
+      { id: "missile", name: "導彈" },
+      { id: "wave", name: "波動" },
+      { id: "spread", name: "散射" },
+    ];
+
+    const keys = new Set();
+    const shots = [];
+    const foes = [];
+    const foeShots = [];
+    const sparks = [];
+    const stars = [];
+    const streaks = [];
+    const drops = [];
+    const rings = [];
+    const floaters = [];
+
+    const state = {
+      mode: "title",
+      score: 0,
+      best: Number(localStorage.getItem("little-bee-best") || 0),
+      lives: 3,
+      bombs: 2,
+      time: 0,
+      scroll: 0,
+      spawn: 0,
+      stage: 0,
+      intermission: 0,
+      bossTimer: 16,
+      bossAlive: false,
+      shake: 0,
+      flash: 0,
+      hitstop: 0,
+      warn: 0,
+      message: "",
+      messageT: 0,
+    };
+
+    const player = {
+      x: W / 2,
+      y: H - 150,
+      r: 11,
+      speed: 360,
+      cool: 0,
+      inv: 0,
+      power: 1,
+      weapon: 0,
+      bank: 0,
+      muzzle: 0,
+    };
+
+    for (let i = 0; i < 70; i++) {
+      stars.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        z: 0.4 + Math.random() * 2.2,
+        s: Math.random() * 1.8 + 0.4,
+      });
+    }
+    for (let i = 0; i < 18; i++) {
+      streaks.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        len: 30 + Math.random() * 70,
+        v: 420 + Math.random() * 520,
+      });
+    }
+
+    function beep(freq, dur, type = "square", gain = 0.04) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      if (!beep.ctx) beep.ctx = new AudioCtx();
+      const ctxA = beep.ctx;
+      if (ctxA.state === "suspended") ctxA.resume();
+      const osc = ctxA.createOscillator();
+      const g = ctxA.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      g.gain.value = gain;
+      g.gain.exponentialRampToValueAtTime(0.0001, ctxA.currentTime + dur);
+      osc.connect(g);
+      g.connect(ctxA.destination);
+      osc.start();
+      osc.stop(ctxA.currentTime + dur);
+    }
+
+    function boom(power) {
+      beep(90 + power * 20, 0.12 + power * 0.04, "sawtooth", 0.05);
+      beep(220 + power * 40, 0.08, "square", 0.03);
+    }
+
+    let foeId = 1;
+
+    function stageNow() {
+      return STAGES[state.stage];
+    }
+
+    function saveBest() {
+      if (state.score > state.best) {
+        state.best = state.score;
+        localStorage.setItem("little-bee-best", String(state.best));
+      }
+    }
+
+    function resetRun() {
+      shots.length = 0;
+      foes.length = 0;
+      foeShots.length = 0;
+      sparks.length = 0;
+      drops.length = 0;
+      rings.length = 0;
+      floaters.length = 0;
+      state.score = 0;
+      state.lives = 3;
+      state.bombs = 2;
+      state.stage = 0;
+      state.time = 0;
+      state.spawn = 0.5;
+      state.intermission = 0;
+      state.bossTimer = STAGES[0].wait;
+      state.bossAlive = false;
+      state.shake = 0;
+      state.flash = 0;
+      state.hitstop = 0;
+      state.warn = 0;
+      state.message = "";
+      player.x = W / 2;
+      player.y = H - 150;
+      player.cool = 0;
+      player.inv = 1.4;
+      player.power = 1;
+      player.weapon = 0;
+      player.bank = 0;
+      player.muzzle = 0;
+      say("第 1 關  夜航", 2.1);
+    }
+
+    function beginStage(index) {
+      state.stage = index;
+      state.bossAlive = false;
+      state.bossTimer = STAGES[index].wait;
+      state.spawn = 0.4;
+      foeShots.length = 0;
+      say("第 " + (index + 1) + " 關  " + STAGES[index].name, 2.1);
+    }
+
+    function cycleWeapon() {
+      player.weapon = (player.weapon + 1) % WEAPONS.length;
+      say(WEAPONS[player.weapon].name, 1.1);
+      beep(640, 0.06, "square", 0.04);
+    }
+
+    function burst(x, y, color, n, speed, life = 0.4) {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const v = speed * (0.3 + Math.random());
+        sparks.push({
+          x, y,
+          vx: Math.cos(a) * v,
+          vy: Math.sin(a) * v,
+          life: life * (0.6 + Math.random()),
+          max: life,
+          color,
+          s: 1.5 + Math.random() * 3.5,
+        });
+      }
+      if (sparks.length > 420) sparks.splice(0, sparks.length - 420);
+    }
+
+    function shock(x, y, max, color) {
+      rings.push({ x, y, r: 6, max, life: 0.38, color });
+    }
+
+    function popup(x, y, text, color) {
+      floaters.push({ x, y, text, color, life: 0.7 });
+    }
+
+    function explode(x, y, power) {
+      burst(x, y, "#fff6d0", 6 + power * 4, 90 + power * 30, 0.28);
+      burst(x, y, "#ff8a3d", 10 + power * 6, 160 + power * 40, 0.45);
+      burst(x, y, "#ffd15a", 5 + power * 2, 260, 0.32);
+      shock(x, y, 28 + power * 26, power > 2 ? "#ffd0a0" : "#9ad7ff");
+      state.shake = Math.max(state.shake, 3 + power * 3.2);
+      state.hitstop = Math.max(state.hitstop, 0.02 + power * 0.018);
+    }
+
+    function say(text, t = 1.6) {
+      state.message = text;
+      state.messageT = t;
+    }
+
+    function spawnFoe(kind) {
+      const margin = 46;
+      const x = margin + Math.random() * (W - margin * 2);
+      if (kind === "boss") {
+        const stage = stageNow();
+        const hp = stage.hp;
+        foes.push({
+          id: foeId++,
+          kind: "boss",
+          bossId: stage.id,
+          name: stage.boss,
+          palette: stage,
+          x: W / 2,
+          y: -200,
+          w: 400 * stage.scale,
+          h: 230 * stage.scale,
+          scale: stage.scale,
+          hp,
+          max: hp,
+          vx: 62 + state.stage * 6,
+          cool: 1.35,
+          spin: 0,
+          score: 1500 + state.stage * 500,
+          flash: 0,
+          dying: 0,
+        });
+        state.bossAlive = true;
+        state.warn = 0;
+        state.shake = 12;
+        say(stage.boss + " 進場", 2.2);
+        boom(3);
+        return;
+      }
+      const lv = state.stage;
+      const table = {
+        grunt: { hp: 1 + Math.floor(lv / 2), vy: 130 + lv * 14, score: 100 + lv * 20, r: 16 },
+        weave: { hp: 2 + Math.floor(lv / 2), vy: 108 + lv * 8, score: 180 + lv * 20, r: 16 },
+        gun: { hp: 3 + lv, vy: 76 + lv * 6, score: 260 + lv * 30, r: 18 },
+      };
+      const spec = table[kind];
+      foes.push({
+        id: foeId++,
+        kind,
+        x,
+        y: -40,
+        phase: Math.random() * Math.PI * 2,
+        hp: spec.hp,
+        max: spec.hp,
+        vy: spec.vy,
+        r: spec.r,
+        cool: 0.7 + Math.random() * 0.6,
+        score: spec.score,
+        flash: 0,
+      });
+    }
+
+    function pushShot(shot) {
+      shots.push(Object.assign({ dmg: 1, pierce: false, victims: null }, shot));
+    }
+
+    function firePlayer() {
+      const level = player.power;
+      const weapon = WEAPONS[player.weapon].id;
+      const y = player.y - 34;
+      if (weapon === "vulcan") {
+        const angles = level >= 3 ? [-0.2, -0.07, 0.07, 0.2] : level >= 2 ? [-0.12, 0, 0.12] : [0];
+        angles.forEach((a) => pushShot({
+          kind: "vulcan", x: player.x + Math.sin(a) * 10, y, vx: Math.sin(a) * 140, vy: -780, wide: level >= 2,
+        }));
+        player.cool = level >= 3 ? 0.07 : 0.09;
+      } else if (weapon === "laser") {
+        const slots = level >= 3 ? [-16, 0, 16] : level >= 2 ? [-10, 10] : [0];
+        slots.forEach((ox) => pushShot({
+          kind: "laser", x: player.x + ox, y, vx: 0, vy: -980, dmg: 2 + level, pierce: true, victims: {},
+        }));
+        player.cool = 0.14;
+      } else if (weapon === "missile") {
+        const slots = level >= 3 ? [-18, 0, 18] : level >= 2 ? [-14, 14] : [0];
+        slots.forEach((ox) => pushShot({
+          kind: "missile", x: player.x + ox, y: player.y - 8, vx: ox * 3, vy: -260, dmg: 4,
+        }));
+        player.cool = 0.32;
+      } else if (weapon === "wave") {
+        const slots = level >= 3 ? [-1.5, -0.5, 0.5, 1.5] : level >= 2 ? [-1, 1] : [0];
+        slots.forEach((slot) => pushShot({
+          kind: "wave", x: player.x, y, baseX: player.x + slot * 18, vx: 0, vy: -560, phase: slot, amp: 28 + level * 8,
+        }));
+        player.cool = 0.11;
+      } else {
+        const count = level >= 3 ? 7 : level >= 2 ? 5 : 3;
+        for (let i = 0; i < count; i++) {
+          const a = -0.7 + (1.4 * i) / (count - 1);
+          pushShot({
+            kind: "spread", x: player.x, y, vx: Math.sin(a) * 280, vy: -680, dmg: 1,
+          });
+        }
+        player.cool = 0.15;
+      }
+      player.muzzle = 0.07;
+      beep(weapon === "laser" ? 520 : weapon === "missile" ? 280 : 860, 0.035, "square", 0.02);
+    }
+
+    function bomb() {
+      if (state.mode !== "play" || state.bombs <= 0 || state.hitstop > 0.12) return;
+      state.bombs -= 1;
+      state.flash = 0.55;
+      state.shake = 16;
+      state.hitstop = 0.08;
+      foeShots.length = 0;
+      shock(player.x, player.y, 520, "#fff1c2");
+      foes.forEach((f) => {
+        if (f.dying > 0) return;
+        f.hp -= f.kind === "boss" ? 28 : 99;
+        f.flash = 0.16;
+        explode(f.x, f.y + (f.kind === "boss" ? 20 : 0), f.kind === "boss" ? 2 : 1);
+        if (f.hp <= 0) finishFoe(f);
+      });
+      boom(4);
+    }
+
+    function hurtPlayer() {
+      if (player.inv > 0 || state.mode !== "play") return;
+      state.lives -= 1;
+      player.inv = 1.7;
+      player.power = 1;
+      state.shake = 14;
+      state.flash = 0.28;
+      state.hitstop = 0.07;
+      explode(player.x, player.y, 2);
+      beep(110, 0.22, "triangle", 0.07);
+      if (state.lives <= 0) {
+        state.mode = "over";
+        saveBest();
+      }
+    }
+
+    function finishFoe(f) {
+      if (f.dead) return;
+      f.dead = true;
+      f.hp = 0;
+      state.score += f.score;
+      popup(f.x, f.y - 10, "+" + f.score, f.kind === "boss" ? "#ffe27a" : "#fff");
+      if (f.kind === "boss") {
+        f.dying = 1.35;
+        state.shake = 22;
+        state.flash = 0.5;
+        state.hitstop = 0.12;
+        say(f.name + " 擊破", 2);
+        boom(5);
+        drops.push({ x: f.x, y: f.y + 50, vy: 70, kind: "weapon" });
+      } else {
+        explode(f.x, f.y, 1);
+        beep(340, 0.06, "square", 0.035);
+        if (Math.random() < 0.16) {
+          const roll = Math.random();
+          drops.push({
+            x: f.x,
+            y: f.y,
+            vy: 80,
+            kind: roll < 0.4 ? "power" : roll < 0.72 ? "weapon" : "bomb",
+          });
+        }
+      }
+    }
+
+    function hitFoe(f, dmg, hx, hy) {
+      if (dmg <= 0 || f.dead) return;
+      f.hp -= dmg;
+      f.flash = f.kind === "boss" ? 0.08 : 0.1;
+      burst(hx, hy, "#d7f4ff", f.kind === "boss" ? 5 : 3, 140, 0.18);
+      shock(hx, hy, f.kind === "boss" ? 18 : 12, "#bfe9ff");
+      state.shake = Math.max(state.shake, f.kind === "boss" ? 2.4 : 1.4);
+      if (f.hp <= 0) finishFoe(f);
+    }
+
+    function bossVolley(f) {
+      const ratio = f.hp / f.max;
+      const aim = Math.atan2(player.y - (f.y + 70), player.x - f.x);
+      const id = f.bossId;
+      if (id === "storm") {
+        for (let i = 0; i < 4; i++) {
+          foeShots.push({ x: 70 + i * 120, y: f.y + 30, vx: 0, vy: 420, r: 5, heavy: true });
+        }
+        foeShots.push({ x: f.x, y: f.y + 80, vx: Math.cos(aim) * 260, vy: Math.sin(aim) * 260, r: 6, heavy: true });
+        return;
+      }
+      if (id === "frost") {
+        for (let i = 0; i < 12; i++) {
+          const a = f.spin + i * (Math.PI * 2 / 12);
+          foeShots.push({
+            x: f.x + Math.cos(a) * 20,
+            y: f.y + 60,
+            vx: Math.cos(a) * 110,
+            vy: 120 + Math.sin(a) * 40,
+            r: 5,
+            heavy: false,
+          });
+        }
+        f.spin += 0.28;
+        return;
+      }
+      if (id === "magma") {
+        for (let i = -2; i <= 2; i++) {
+          foeShots.push({
+            x: f.x + i * 34,
+            y: f.y + 80,
+            vx: Math.cos(aim) * 240 + i * 50,
+            vy: Math.max(180, Math.sin(aim) * 320),
+            r: 7,
+            heavy: true,
+          });
+        }
+        return;
+      }
+      if (id === "queen" && ratio <= 0.62) {
+        if (ratio > 0.3) {
+          for (let i = -1; i <= 1; i++) {
+            foeShots.push({
+              x: f.x + i * 46,
+              y: f.y + 80,
+              vx: Math.cos(aim) * 280 + i * 40,
+              vy: Math.sin(aim) * 280,
+              r: 6,
+              heavy: true,
+            });
+          }
+          foeShots.push({ x: f.x - 160, y: f.y + 20, vx: -50, vy: 300, r: 5, heavy: false });
+          foeShots.push({ x: f.x + 160, y: f.y + 20, vx: 50, vy: 300, r: 5, heavy: false });
+        } else {
+          for (let i = 0; i < 12; i++) {
+            const a = f.spin + i * (Math.PI * 2 / 12);
+            foeShots.push({
+              x: f.x + Math.cos(a) * 30,
+              y: f.y + 40,
+              vx: Math.cos(a) * 170,
+              vy: 160 + Math.sin(a) * 90,
+              r: 5,
+              heavy: false,
+            });
+          }
+          f.spin += 0.4;
+        }
+        return;
+      }
+      const span = id === "queen" ? 3 : 2;
+      for (let i = -span; i <= span; i++) {
+        foeShots.push({
+          x: f.x + i * 36,
+          y: f.y + 86,
+          vx: i * 68,
+          vy: id === "queen" ? 250 : 220,
+          r: 6,
+          heavy: true,
+        });
+      }
+    }
+
+    function update(dt) {
+      const sim = state.hitstop > 0 ? 0 : dt;
+      if (state.hitstop > 0) state.hitstop = Math.max(0, state.hitstop - dt);
+      if (state.flash > 0) state.flash -= dt;
+      if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 22);
+      if (state.messageT > 0) state.messageT -= dt;
+      if (state.warn > 0) state.warn -= dt;
+      if (player.muzzle > 0) player.muzzle -= dt;
+
+      state.scroll += (state.bossAlive ? 90 : 160) * dt;
+      stars.forEach((s) => {
+        s.y += s.z * 140 * dt;
+        if (s.y > H) {
+          s.y = 0;
+          s.x = Math.random() * W;
+        }
+      });
+      streaks.forEach((s) => {
+        s.y += s.v * dt;
+        if (s.y - s.len > H) {
+          s.y = -20;
+          s.x = Math.random() * W;
+        }
+      });
+
+      sparks.forEach((p) => {
+        p.life -= dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      });
+      for (let i = sparks.length - 1; i >= 0; i--) if (sparks[i].life <= 0) sparks.splice(i, 1);
+      rings.forEach((r) => {
+        r.life -= dt;
+        r.r += (r.max - r.r) * Math.min(1, dt * 8);
+      });
+      for (let i = rings.length - 1; i >= 0; i--) if (rings[i].life <= 0) rings.splice(i, 1);
+      floaters.forEach((f) => {
+        f.life -= dt;
+        f.y -= 36 * dt;
+      });
+      for (let i = floaters.length - 1; i >= 0; i--) if (floaters[i].life <= 0) floaters.splice(i, 1);
+
+      if (state.mode !== "play" || sim === 0) return;
+
+      state.time += sim;
+      if (player.inv > 0) player.inv -= sim;
+      if (player.cool > 0) player.cool -= sim;
+
+      let dx = 0;
+      let dy = 0;
+      if (keys.has("arrowleft") || keys.has("a")) dx -= 1;
+      if (keys.has("arrowright") || keys.has("d")) dx += 1;
+      if (keys.has("arrowup") || keys.has("w")) dy -= 1;
+      if (keys.has("arrowdown") || keys.has("s")) dy += 1;
+      const len = Math.hypot(dx, dy) || 1;
+      const focus = keys.has("shift") ? 0.45 : 1;
+      player.x += (dx / len) * player.speed * focus * sim;
+      player.y += (dy / len) * player.speed * focus * sim;
+      player.x = Math.max(52, Math.min(W - 52, player.x));
+      player.y = Math.max(90, Math.min(H - 64, player.y));
+      const targetBank = dx * -0.38;
+      player.bank += (targetBank - player.bank) * Math.min(1, sim * 12);
+
+      if (Math.random() < 0.8) {
+        burst(player.x, player.y + 24, "rgba(255,170,70,0.9)", 1, 20, 0.22);
+      }
+
+      if ((keys.has(" ") || keys.has("z")) && player.cool <= 0) firePlayer();
+
+      if (state.intermission > 0) {
+        state.intermission -= sim;
+        if (state.intermission <= 0) beginStage(state.stage + 1);
+      } else if (!state.bossAlive) {
+        state.spawn -= sim;
+        state.bossTimer -= sim;
+        if (state.bossTimer < 2.4 && state.bossTimer > 0) state.warn = Math.max(state.warn, state.bossTimer);
+        if (state.bossTimer <= 0) spawnFoe("boss");
+        else if (state.spawn <= 0) {
+          const roll = Math.random();
+          const kind = roll < 0.46 ? "grunt" : roll < 0.74 ? "weave" : "gun";
+          const count = 1 + (state.stage > 1 && Math.random() < 0.55 ? 1 : 0);
+          for (let i = 0; i < count; i++) spawnFoe(kind);
+          state.spawn = Math.max(0.36, 1.02 - state.stage * 0.08);
+        }
+      }
+
+      for (let i = shots.length - 1; i >= 0; i--) {
+        const b = shots[i];
+        if (b.kind === "missile") {
+          let best = null;
+          let bestD = 460;
+          foes.forEach((f) => {
+            if (f.dead || f.dying > 0) return;
+            const d = Math.hypot(f.x - b.x, f.y - b.y);
+            if (d < bestD) {
+              best = f;
+              bestD = d;
+            }
+          });
+          const speed = 360;
+          if (best) {
+            const ang = Math.atan2(best.y - b.y, best.x - b.x);
+            const cur = Math.atan2(b.vy, b.vx);
+            let diff = ang - cur;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            const next = cur + Math.max(-5 * sim, Math.min(5 * sim, diff));
+            b.vx = Math.cos(next) * speed;
+            b.vy = Math.sin(next) * speed;
+          }
+          b.x += b.vx * sim;
+          b.y += b.vy * sim;
+        } else if (b.kind === "wave") {
+          b.phase += sim * 10;
+          b.y += b.vy * sim;
+          b.x = b.baseX + Math.sin(b.phase) * b.amp;
+        } else {
+          b.x += b.vx * sim;
+          b.y += b.vy * sim;
+        }
+        if (b.y < -40 || b.y > H + 40 || b.x < -40 || b.x > W + 40) {
+          shots.splice(i, 1);
+          continue;
+        }
+        let consumed = false;
+        for (let j = foes.length - 1; j >= 0; j--) {
+          const f = foes[j];
+          if (f.dead && f.kind !== "boss") continue;
+          if (f.dying > 0) continue;
+          if (b.pierce && b.victims[f.id]) continue;
+          const reach = b.kind === "laser" ? 14 : b.kind === "missile" ? 14 : 8;
+          const hit = f.kind === "boss"
+            ? Math.abs(b.x - f.x) < f.w * 0.46 && b.y < f.y + f.h * 0.42 && b.y > f.y - f.h * 0.48
+            : Math.hypot(b.x - f.x, b.y - f.y) < f.r + reach;
+          if (!hit) continue;
+          if (b.pierce) b.victims[f.id] = 1;
+          else consumed = true;
+          hitFoe(f, b.dmg, b.x, b.y);
+          if (consumed) break;
+        }
+        if (consumed) shots.splice(i, 1);
+      }
+
+      for (let i = foes.length - 1; i >= 0; i--) {
+        const f = foes[i];
+        if (f.flash > 0) f.flash -= sim;
+        if (f.kind === "boss") {
+          if (f.dying > 0) {
+            f.dying -= sim;
+            f.vy = 0;
+            if (Math.random() < 0.55) {
+              const ex = f.x + (Math.random() - 0.5) * 280;
+              const ey = f.y + (Math.random() - 0.5) * 140;
+              explode(ex, ey, Math.random() < 0.25 ? 3 : 1);
+            }
+            if (f.dying <= 0) {
+              explode(f.x, f.y, 5);
+              state.bossAlive = false;
+              foes.splice(i, 1);
+              if (state.stage >= STAGES.length - 1) {
+                state.mode = "win";
+                saveBest();
+              } else {
+                state.intermission = 2.3;
+              }
+            }
+            continue;
+          }
+          f.y += (168 - f.y) * Math.min(1, sim * 1.4);
+          f.x += f.vx * sim;
+          const limit = Math.min(200, 48 + f.w * 0.22);
+          if (f.x < limit || f.x > W - limit) f.vx *= -1;
+          f.cool -= sim;
+          if (f.cool <= 0) {
+            const fast = f.bossId === "magma" ? 0.42 : f.bossId === "frost" ? 0.7 : 0.5;
+            f.cool = Math.max(fast, 1.2 - (1 - f.hp / f.max) * 0.45);
+            bossVolley(f);
+            beep(160, 0.05, "sawtooth", 0.03);
+          }
+        } else if (!f.dead) {
+          f.y += f.vy * sim;
+          if (f.kind === "weave") f.x += Math.sin(state.time * 3.2 + f.phase) * 150 * sim;
+          f.x = Math.max(28, Math.min(W - 28, f.x));
+          if (f.kind === "gun") {
+            f.cool -= sim;
+            if (f.cool <= 0 && f.y > 30 && f.y < H - 120) {
+              f.cool = 1.25;
+              const ang = Math.atan2(player.y - f.y, player.x - f.x);
+              foeShots.push({
+                x: f.x,
+                y: f.y + 16,
+                vx: Math.cos(ang) * 230,
+                vy: Math.sin(ang) * 230,
+                r: 5,
+                heavy: false,
+              });
+            }
+          }
+        }
+        if (!f.dead && !(f.dying > 0)) {
+          const touch = f.kind === "boss"
+            ? Math.abs(player.x - f.x) < 120 && Math.abs(player.y - f.y) < 70
+            : Math.hypot(player.x - f.x, player.y - f.y) < f.r + player.r;
+          if (touch) {
+            if (f.kind !== "boss") finishFoe(f);
+            hurtPlayer();
+          }
+        }
+        if ((f.dead && f.kind !== "boss") || f.y > H + 50) foes.splice(i, 1);
+      }
+
+      for (let i = foeShots.length - 1; i >= 0; i--) {
+        const b = foeShots[i];
+        b.x += b.vx * sim;
+        b.y += b.vy * sim;
+        if (b.y > H + 30 || b.y < -40 || b.x < -30 || b.x > W + 30) {
+          foeShots.splice(i, 1);
+          continue;
+        }
+        if (Math.hypot(b.x - player.x, b.y - player.y) < b.r + player.r) {
+          foeShots.splice(i, 1);
+          hurtPlayer();
+        }
+      }
+
+      for (let i = drops.length - 1; i >= 0; i--) {
+        const d = drops[i];
+        d.y += d.vy * sim;
+        if (Math.hypot(d.x - player.x, d.y - player.y) < 30) {
+          if (d.kind === "bomb") {
+            state.bombs = Math.min(5, state.bombs + 1);
+            say("炸彈 +1");
+          } else if (d.kind === "weapon") {
+            cycleWeapon();
+          } else {
+            player.power = Math.min(3, player.power + 1);
+            say(player.power >= 3 ? "火力全開" : "火力提升");
+            shock(player.x, player.y, 40, "#9dffc2");
+          }
+          beep(920, 0.08, "square", 0.04);
+          drops.splice(i, 1);
+        } else if (d.y > H + 20) drops.splice(i, 1);
+      }
+    }
+
+    function drawFighter(x, y, scale, tilt, muzzle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(tilt);
+      ctx.scale(scale, scale);
+      const flick = 0.72 + Math.random() * 0.55;
+      const flame = ctx.createLinearGradient(0, 18, 0, 58);
+      flame.addColorStop(0, "rgba(255,246,210,0.95)");
+      flame.addColorStop(0.35, "rgba(255,140,40,0.85)");
+      flame.addColorStop(1, "rgba(255,50,0,0)");
+      ctx.fillStyle = flame;
+      [[0, 54], [-16, 40], [16, 40]].forEach(([ox, len]) => {
+        ctx.beginPath();
+        ctx.moveTo(ox - 5, 16);
+        ctx.lineTo(ox, len * flick);
+        ctx.lineTo(ox + 5, 16);
+        ctx.fill();
+      });
+      ctx.fillStyle = "#141c28";
+      ctx.beginPath();
+      ctx.moveTo(0, -8);
+      ctx.lineTo(46, 20);
+      ctx.lineTo(18, 14);
+      ctx.lineTo(10, 26);
+      ctx.lineTo(0, 12);
+      ctx.lineTo(-10, 26);
+      ctx.lineTo(-18, 14);
+      ctx.lineTo(-46, 20);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#f2c43c";
+      ctx.beginPath();
+      ctx.moveTo(0, -40);
+      ctx.lineTo(8, 6);
+      ctx.lineTo(5, 24);
+      ctx.lineTo(-5, 24);
+      ctx.lineTo(-8, 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#1a1408";
+      ctx.fillRect(-6, -2, 12, 3);
+      ctx.fillRect(-6, 8, 12, 3);
+      ctx.fillStyle = "#8fe7ff";
+      ctx.beginPath();
+      ctx.ellipse(0, -10, 3.4, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#2b384c";
+      ctx.fillRect(-18, 12, 8, 8);
+      ctx.fillRect(10, 12, 8, 8);
+      if (muzzle > 0) {
+        ctx.globalAlpha = Math.min(1, muzzle * 14);
+        ctx.fillStyle = "#fff8d0";
+        ctx.beginPath();
+        ctx.moveTo(0, -58);
+        ctx.lineTo(7, -36);
+        ctx.lineTo(-7, -36);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
+
+    function drawEnemyJet(f) {
+      ctx.save();
+      ctx.translate(f.x, f.y);
+      ctx.rotate(Math.PI);
+      const color = f.kind === "gun" ? "#c4374a" : f.kind === "weave" ? "#2f8f9d" : "#e07a32";
+      ctx.fillStyle = "#1a2230";
+      ctx.beginPath();
+      ctx.moveTo(0, -6);
+      ctx.lineTo(22, 16);
+      ctx.lineTo(8, 10);
+      ctx.lineTo(0, 18);
+      ctx.lineTo(-8, 10);
+      ctx.lineTo(-22, 16);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(0, -20);
+      ctx.lineTo(6, 8);
+      ctx.lineTo(0, 14);
+      ctx.lineTo(-6, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#ffd2dc";
+      ctx.fillRect(-2, -4, 4, 7);
+      if (f.flash > 0) {
+        ctx.globalAlpha = Math.min(1, f.flash * 8);
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(0, 0, f.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawBoss(f) {
+      const pulse = 0.55 + Math.sin(state.time * 7) * 0.45;
+      const hurt = f.flash > 0 ? Math.min(1, f.flash * 10) : 0;
+      const pal = f.palette;
+      ctx.save();
+      ctx.translate(f.x, f.y);
+      ctx.scale(f.scale, f.scale);
+      ctx.shadowColor = pal.core;
+      ctx.shadowBlur = 28;
+      ctx.fillStyle = hurt ? "#fff" : pal.hull;
+      ctx.beginPath();
+      ctx.moveTo(0, -120);
+      ctx.lineTo(78, -78);
+      ctx.lineTo(168, -24);
+      ctx.lineTo(196, 28);
+      ctx.lineTo(150, 78);
+      ctx.lineTo(70, 96);
+      ctx.lineTo(0, 78);
+      ctx.lineTo(-70, 96);
+      ctx.lineTo(-150, 78);
+      ctx.lineTo(-196, 28);
+      ctx.lineTo(-168, -24);
+      ctx.lineTo(-78, -78);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      if (!hurt) {
+        ctx.fillStyle = pal.plate;
+        ctx.beginPath();
+        ctx.moveTo(0, -96);
+        ctx.lineTo(48, -20);
+        ctx.lineTo(28, 70);
+        ctx.lineTo(-28, 70);
+        ctx.lineTo(-48, -20);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillRect(-150, 8, 70, 16);
+        ctx.fillRect(80, 8, 70, 16);
+        ctx.fillStyle = pal.core;
+        ctx.fillRect(-18, -70, 36, 8);
+        ctx.fillRect(-14, -48, 28, 6);
+        const core = ctx.createRadialGradient(0, 16, 4, 0, 16, 34);
+        core.addColorStop(0, `rgba(255,240,220,${0.8 + pulse * 0.2})`);
+        core.addColorStop(0.5, pal.core);
+        core.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.arc(0, 16, 34, 0, Math.PI * 2);
+        ctx.fill();
+        [-150, 150].forEach((cx) => {
+          ctx.fillStyle = f.cool < 0.28 ? "#fff1a8" : pal.core;
+          ctx.beginPath();
+          ctx.arc(cx, 36, 8, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.fillStyle = pal.core;
+        ctx.fillRect(-8, 70, 16, 18);
+      }
+      ctx.restore();
+
+      const ratio = Math.max(0, f.hp / f.max);
+      const barW = W - 48;
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(24, 108, barW, 16);
+      const grad = ctx.createLinearGradient(24, 0, 24 + barW, 0);
+      grad.addColorStop(0, pal.core);
+      grad.addColorStop(1, "#ffe7a8");
+      ctx.fillStyle = grad;
+      ctx.fillRect(24, 108, barW * ratio, 16);
+      ctx.strokeStyle = "rgba(255,255,255,0.7)";
+      ctx.strokeRect(24, 108, barW, 16);
+      ctx.fillStyle = "#fff6e8";
+      ctx.font = "bold 14px sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(f.name, 28, 121);
+      ctx.textAlign = "right";
+      ctx.fillText(Math.ceil(ratio * 100) + "%", W - 28, 121);
+    }
+
+    function drawWorld() {
+      const stage = stageNow();
+      const sky = ctx.createLinearGradient(0, 0, 0, H);
+      sky.addColorStop(0, stage.sky[0]);
+      sky.addColorStop(0.45, stage.sky[1]);
+      sky.addColorStop(1, stage.sky[2]);
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, W, H);
+
+      const glow = ctx.createRadialGradient(W / 2, H * 0.15, 20, W / 2, H * 0.2, 280);
+      glow.addColorStop(0, `rgba(${stage.glow}, 0.2)`);
+      glow.addColorStop(1, `rgba(${stage.glow}, 0)`);
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, W, H);
+
+      stars.forEach((s) => {
+        ctx.globalAlpha = 0.25 + s.z * 0.25;
+        ctx.fillStyle = s.z > 1.6 ? "#fff4d2" : "#d5e4ff";
+        ctx.fillRect(s.x, s.y, s.s, s.s * (s.z > 1.4 ? 2.4 : 1));
+      });
+      ctx.globalAlpha = 1;
+
+      ctx.strokeStyle = "rgba(186, 214, 255, 0.13)";
+      ctx.lineWidth = 2;
+      streaks.forEach((s) => {
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(s.x, s.y - s.len);
+        ctx.stroke();
+      });
+
+      const tile = 54;
+      const offset = state.scroll % tile;
+      for (let y = -tile; y < H + tile; y += tile) {
+        for (let x = 8; x < W; x += tile) {
+          const row = Math.floor((y + state.scroll) / tile);
+          const n = Math.abs(Math.sin(x * 0.17 + row * 1.7));
+          if (n < 0.62) continue;
+          const bh = 8 + n * 26;
+          const py = y - offset + tile - bh;
+          ctx.fillStyle = `rgba(${12 + n * 20}, ${22 + n * 30}, ${40 + n * 20}, 0.55)`;
+          ctx.fillRect(x, py, tile - 22, bh);
+          ctx.fillStyle = n > 0.82 ? "rgba(255, 196, 110, 0.75)" : "rgba(120, 190, 255, 0.4)";
+          ctx.fillRect(x + 4, py + 4, 4, 3);
+          if (bh > 20) ctx.fillRect(x + 12, py + 10, 4, 3);
+        }
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      const mag = state.shake;
+      const sx = mag ? (Math.random() - 0.5) * mag : 0;
+      const sy = mag ? (Math.random() - 0.5) * mag : 0;
+      ctx.save();
+      ctx.translate(sx, sy);
+      drawWorld();
+
+      drops.forEach((d) => {
+        const color = d.kind === "bomb" ? "#ff6d6d" : d.kind === "weapon" ? "#7ecbff" : "#7dffa6";
+        const label = d.kind === "bomb" ? "B" : d.kind === "weapon" ? "W" : "P";
+        ctx.save();
+        ctx.translate(d.x, d.y);
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 16;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(0, 0, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#102018";
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(label, 0, 4);
+        ctx.restore();
+      });
+
+      ctx.globalCompositeOperation = "lighter";
+      foeShots.forEach((b) => {
+        const g = ctx.createRadialGradient(b.x, b.y, 1, b.x, b.y, b.heavy ? 14 : 10);
+        g.addColorStop(0, "#fff");
+        g.addColorStop(0.4, b.heavy ? "#ff5a6a" : "#ff8fa3");
+        g.addColorStop(1, "rgba(255,60,80,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.heavy ? 14 : 10, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      shots.forEach((b) => {
+        if (b.kind === "laser") {
+          const g = ctx.createLinearGradient(b.x, b.y - 10, b.x, b.y + 54);
+          g.addColorStop(0, "rgba(220,250,255,0)");
+          g.addColorStop(0.45, "#e9fbff");
+          g.addColorStop(1, "#3ec6ff");
+          ctx.fillStyle = g;
+          ctx.fillRect(b.x - 3, b.y, 6, 52);
+        } else if (b.kind === "missile") {
+          ctx.save();
+          ctx.translate(b.x, b.y);
+          ctx.rotate(Math.atan2(b.vy, b.vx) + Math.PI / 2);
+          ctx.fillStyle = "#ffb15a";
+          ctx.beginPath();
+          ctx.moveTo(0, -10);
+          ctx.lineTo(5, 8);
+          ctx.lineTo(-5, 8);
+          ctx.fill();
+          ctx.restore();
+        } else if (b.kind === "wave") {
+          ctx.fillStyle = "#d7a6ff";
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (b.kind === "spread") {
+          ctx.fillStyle = "#9dffc2";
+          ctx.fillRect(b.x - 2, b.y, 4, 16);
+        } else {
+          const g = ctx.createLinearGradient(b.x, b.y, b.x, b.y + 28);
+          g.addColorStop(0, "rgba(255,255,255,0)");
+          g.addColorStop(0.4, "#fff4b0");
+          g.addColorStop(1, "#ffb03a");
+          ctx.fillStyle = g;
+          ctx.fillRect(b.x - (b.wide ? 3 : 2), b.y, b.wide ? 6 : 4, 26);
+        }
+      });
+      ctx.globalCompositeOperation = "source-over";
+
+      foes.forEach((f) => {
+        if (f.kind === "boss") drawBoss(f);
+        else drawEnemyJet(f);
+      });
+
+      rings.forEach((r) => {
+        ctx.globalAlpha = Math.max(0, r.life * 2.2);
+        ctx.strokeStyle = r.color;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+
+      sparks.forEach((p) => {
+        ctx.globalAlpha = Math.max(0, p.life / p.max);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, p.s, p.s);
+      });
+      ctx.globalAlpha = 1;
+
+      floaters.forEach((f) => {
+        ctx.globalAlpha = Math.max(0, f.life * 1.6);
+        ctx.fillStyle = f.color;
+        ctx.font = "bold 16px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(f.text, f.x, f.y);
+      });
+      ctx.globalAlpha = 1;
+
+      if (state.mode !== "title") {
+        const blink = player.inv > 0 && Math.floor(player.inv * 14) % 2 === 0;
+        ctx.globalAlpha = blink ? 0.35 : 1;
+        drawFighter(player.x, player.y, 1.05, player.bank, player.muzzle);
+        ctx.globalAlpha = 1;
+        if (keys.has("shift") && state.mode === "play") {
+          ctx.strokeStyle = "#fff";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(player.x, player.y - 4, player.r, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+
+      ctx.fillStyle = "#f7f4ee";
+      ctx.font = "bold 20px sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("SCORE  " + state.score, 18, 34);
+      ctx.textAlign = "right";
+      ctx.fillText("BEST  " + state.best, W - 18, 34);
+      ctx.textAlign = "left";
+      ctx.font = "16px sans-serif";
+      ctx.fillStyle = "#ff8d9a";
+      ctx.fillText("♥".repeat(Math.max(0, state.lives)), 18, 58);
+      ctx.fillStyle = "#f7f4ee";
+      ctx.fillText("  BOMB " + state.bombs, 78, 58);
+      ctx.font = "bold 15px sans-serif";
+      ctx.fillStyle = "#ffe27a";
+      ctx.fillText("第 " + (state.stage + 1) + "/5 關  " + stageNow().name, 18, 82);
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#b7f3ff";
+      ctx.fillText(WEAPONS[player.weapon].name + "  Lv" + player.power, W - 18, 82);
+
+      if (state.warn > 0 && !state.bossAlive) {
+        const blink = Math.floor(state.time * 8) % 2 === 0;
+        ctx.fillStyle = blink ? "rgba(255, 40, 50, 0.18)" : "rgba(255, 40, 50, 0.05)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = "center";
+        ctx.fillStyle = blink ? "#ff4d4d" : "#ffd0d0";
+        ctx.font = "bold 42px sans-serif";
+        ctx.fillText("WARNING", W / 2, H * 0.38);
+        ctx.font = "bold 22px sans-serif";
+        ctx.fillText(stageNow().boss + " 接近", W / 2, H * 0.44);
+      }
+
+      if (state.messageT > 0) {
+        ctx.globalAlpha = Math.min(1, state.messageT);
+        ctx.textAlign = "center";
+        ctx.font = "bold 30px sans-serif";
+        ctx.fillStyle = "#ffe27a";
+        ctx.fillText(state.message, W / 2, state.bossAlive ? 150 : 130);
+        ctx.globalAlpha = 1;
+      }
+
+      if (state.flash > 0) {
+        ctx.fillStyle = `rgba(255, 236, 200, ${Math.min(0.7, state.flash)})`;
+        ctx.fillRect(-20, -20, W + 40, H + 40);
+      }
+
+      if (state.bossAlive) {
+        ctx.fillStyle = `rgba(${stageNow().glow}, 0.08)`;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      if (state.mode === "title" || state.mode === "over" || state.mode === "win") {
+        ctx.fillStyle = "rgba(4, 7, 14, 0.68)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#ffe27a";
+        ctx.font = "bold 52px sans-serif";
+        ctx.fillText(state.mode === "win" ? "艦隊肅清" : "小蜜蜂雷電", W / 2, H * 0.32);
+        ctx.fillStyle = "#f4f1e8";
+        ctx.font = "20px sans-serif";
+        if (state.mode === "over") {
+          ctx.fillText("停在第 " + (state.stage + 1) + " 關", W / 2, H * 0.4);
+          ctx.fillText("SCORE  " + state.score, W / 2, H * 0.46);
+        } else if (state.mode === "win") {
+          ctx.fillText("五關首領全部擊破", W / 2, H * 0.4);
+          ctx.fillText("SCORE  " + state.score, W / 2, H * 0.46);
+        } else {
+          ctx.fillText("五關討伐，擊破每一艘旗艦", W / 2, H * 0.4);
+        }
+        ctx.fillStyle = "#9ee7ff";
+        ctx.fillText("按 Enter 或點擊開始", W / 2, H * 0.56);
+        ctx.fillStyle = "rgba(244,241,232,0.75)";
+        ctx.font = "16px sans-serif";
+        ctx.fillText("C 切換武器　P 提升等級　W 換武器　B 炸彈", W / 2, H * 0.62);
+        drawFighter(W / 2, H * 0.76, 1.8, Math.sin(performance.now() / 500) * 0.12, 0.04);
+      }
+
+      ctx.restore();
+    }
+
+    let last = performance.now();
+    function frame(now) {
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+      update(dt);
+      draw();
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    addEventListener("keydown", (e) => {
+      const k = e.key.toLowerCase();
+      if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
+      keys.add(k);
+      if ((k === "enter" || k === " ") && state.mode !== "play") {
+        resetRun();
+        state.mode = "play";
+      }
+      if (k === "x") bomb();
+      if (k === "c" && !e.repeat && state.mode === "play") cycleWeapon();
+    });
+    addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+    canvas.addEventListener("pointerdown", () => {
+      if (state.mode !== "play") {
+        resetRun();
+        state.mode = "play";
+      }
+    });
+    addEventListener("blur", () => keys.clear());
+  </script>
+</body>
+</html>
