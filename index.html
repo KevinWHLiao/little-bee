@@ -114,6 +114,7 @@
     @media (pointer: coarse) {
       .hud-hint { display: none; }
     }
+    body.touch-mode .hud-hint { display: none; }
   </style>
 </head>
 <body>
@@ -154,9 +155,20 @@
       { id: "spread", name: "散射" },
     ];
 
-    const useTouch = window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
+    let useTouch = window.matchMedia("(pointer: coarse)").matches
+      || window.matchMedia("(hover: none)").matches
+      || (navigator.maxTouchPoints || 0) > 0
+      || "ontouchstart" in window
+      || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
     const touch = { id: null, ox: 0, oy: 0, px: 0, py: 0, slow: false };
     const keys = new Set();
+
+    function enableTouch() {
+      useTouch = true;
+      document.body.classList.add("touch-mode");
+    }
+    if (useTouch) document.body.classList.add("touch-mode");
+    window.addEventListener("touchstart", enableTouch, { passive: true });
 
     function canvasPoint(event) {
       const rect = canvas.getBoundingClientRect();
@@ -1469,6 +1481,7 @@
     });
     addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
     canvas.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "touch") enableTouch();
       armMusic();
       if (state.naming) return;
       if (state.mode !== "play") {
