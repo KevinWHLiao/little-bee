@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>小蜜蜂雷電</title>
   <style>
     :root { color-scheme: dark; }
@@ -13,6 +13,8 @@
       background: #05070d;
       color: #f4f1e8;
       font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+      overflow: hidden;
+      overscroll-behavior: none;
     }
     body {
       display: grid;
@@ -24,7 +26,9 @@
       width: min(100vw, calc(100vh * 9 / 16));
       aspect-ratio: 9 / 16;
       max-height: 100vh;
+      max-height: 100dvh;
       box-shadow: 0 0 0 1px #243044, 0 24px 80px rgba(0, 0, 0, 0.55);
+      touch-action: none;
     }
     canvas {
       display: block;
@@ -80,17 +84,54 @@
       font-weight: 700;
       cursor: pointer;
     }
+    .touch-ui { display: none; }
+    .touch-ui.on { display: block; }
+    .touch-ui button {
+      position: absolute;
+      z-index: 3;
+      width: 68px;
+      height: 68px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      background: rgba(8, 12, 20, 0.62);
+      color: #ffe27a;
+      font: 700 15px "Segoe UI", "Microsoft JhengHei", sans-serif;
+      touch-action: manipulation;
+    }
+    #btn-pause {
+      left: 50%;
+      top: 8px;
+      transform: translateX(-50%);
+      width: auto;
+      height: 36px;
+      padding: 0 16px;
+      border-radius: 999px;
+    }
+    #btn-bomb { right: 16px; bottom: calc(78px + env(safe-area-inset-bottom)); }
+    #btn-weapon { right: 16px; bottom: calc(158px + env(safe-area-inset-bottom)); }
+    #btn-slow { left: 16px; bottom: calc(78px + env(safe-area-inset-bottom)); }
+    #btn-music { left: 16px; bottom: calc(158px + env(safe-area-inset-bottom)); }
+    @media (pointer: coarse) {
+      .hud-hint { display: none; }
+    }
   </style>
 </head>
 <body>
   <div class="stage">
     <canvas id="game" width="540" height="960"></canvas>
-    <div class="hud-hint">方向鍵 / WASD 移動　Shift 精密操作　空白鍵射擊　C 換武器　X 炸彈　M 音樂</div>
+    <div class="hud-hint">方向鍵 / WASD 移動　Shift 慢速　空白鍵射擊　C 換武器　X 炸彈　P 暫停　M 音樂</div>
     <div class="credit">此為 Kevin Liao 製作　如要轉載請註明</div>
     <form id="score-form">
       <input id="player-name" maxlength="8" placeholder="輸入名字" autocomplete="nickname" />
       <button type="submit">登上排行榜</button>
     </form>
+    <div class="touch-ui" id="touch-ui">
+      <button type="button" id="btn-pause">暫停</button>
+      <button type="button" id="btn-bomb">炸彈</button>
+      <button type="button" id="btn-weapon">武器</button>
+      <button type="button" id="btn-slow">慢</button>
+      <button type="button" id="btn-music">音樂</button>
+    </div>
   </div>
   <script>
     const canvas = document.getElementById("game");
@@ -113,7 +154,25 @@
       { id: "spread", name: "散射" },
     ];
 
+    const useTouch = window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
+    const touch = { id: null, ox: 0, oy: 0, px: 0, py: 0, slow: false };
     const keys = new Set();
+
+    function canvasPoint(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left) * (W / rect.width),
+        y: (event.clientY - rect.top) * (H / rect.height),
+      };
+    }
+
+    function togglePause() {
+      if (state.mode !== "play" || state.naming) return;
+      state.paused = !state.paused;
+      touch.id = null;
+      touch.slow = false;
+      keys.clear();
+    }
     const shots = [];
     const foes = [];
     const foeShots = [];
@@ -144,6 +203,7 @@
       message: "",
       messageT: 0,
       naming: false,
+      paused: false,
     };
 
     const player = {
@@ -329,6 +389,8 @@
       state.warn = 0;
       state.message = "";
       state.naming = false;
+      state.paused = false;
+      touch.id = null;
       player.x = W / 2;
       player.y = H - 150;
       player.cool = 0;
@@ -497,7 +559,7 @@
     }
 
     function bomb() {
-      if (state.mode !== "play" || state.bombs <= 0 || state.hitstop > 0.12) return;
+      if (state.mode !== "play" || state.bombs <= 0 || state.paused || state.hitstop > 0.12) return;
       state.bombs -= 1;
       state.flash = 0.55;
       state.shake = 16;
@@ -649,6 +711,7 @@
     }
 
     function update(dt) {
+      if (state.paused && state.mode === "play") return;
       const sim = state.hitstop > 0 ? 0 : dt;
       if (state.hitstop > 0) state.hitstop = Math.max(0, state.hitstop - dt);
       if (state.flash > 0) state.flash -= dt;
@@ -703,7 +766,7 @@
       if (keys.has("arrowup") || keys.has("w")) dy -= 1;
       if (keys.has("arrowdown") || keys.has("s")) dy += 1;
       const len = Math.hypot(dx, dy) || 1;
-      const focus = keys.has("shift") ? 0.45 : 1;
+      const focus = keys.has("shift") || touch.slow ? 0.45 : 1;
       player.x += (dx / len) * player.speed * focus * sim;
       player.y += (dy / len) * player.speed * focus * sim;
       player.x = Math.max(52, Math.min(W - 52, player.x));
@@ -715,7 +778,7 @@
         burst(player.x, player.y + 24, "rgba(255,170,70,0.9)", 1, 20, 0.22);
       }
 
-      if ((keys.has(" ") || keys.has("z")) && player.cool <= 0) firePlayer();
+      if ((keys.has(" ") || keys.has("z") || (useTouch && touch.id !== null)) && player.cool <= 0) firePlayer();
 
       if (state.intermission > 0) {
         state.intermission -= sim;
@@ -1230,7 +1293,7 @@
         ctx.globalAlpha = blink ? 0.35 : 1;
         drawFighter(player.x, player.y, 1.05, player.bank, player.muzzle);
         ctx.globalAlpha = 1;
-        if (keys.has("shift") && state.mode === "play") {
+        if (keys.has("shift") || touch.slow) {
           ctx.strokeStyle = "#fff";
           ctx.lineWidth = 1.5;
           ctx.beginPath();
@@ -1289,6 +1352,18 @@
         ctx.fillRect(0, 0, W, H);
       }
 
+      if (state.paused && state.mode === "play") {
+        ctx.fillStyle = "rgba(4, 7, 14, 0.55)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#ffe27a";
+        ctx.font = "bold 48px sans-serif";
+        ctx.fillText("暫停", W / 2, H * 0.46);
+        ctx.fillStyle = "#f4f1e8";
+        ctx.font = "20px sans-serif";
+        ctx.fillText(useTouch ? "點一下畫面繼續" : "按 P 或點暫停繼續", W / 2, H * 0.52);
+      }
+
       if (state.mode === "title" || state.mode === "over" || state.mode === "win") {
         ctx.fillStyle = "rgba(4, 7, 14, 0.68)";
         ctx.fillRect(0, 0, W, H);
@@ -1314,7 +1389,7 @@
           ctx.fillStyle = "#9ee7ff";
           ctx.font = "20px sans-serif";
           ctx.textAlign = "center";
-          ctx.fillText("按 Enter 或點擊開始", W / 2, H * 0.58);
+          ctx.fillText(useTouch ? "點一下開始，按住畫面拖曳" : "按 Enter 或點擊開始", W / 2, H * 0.58);
           ctx.fillStyle = "rgba(244,241,232,0.75)";
           ctx.font = "16px sans-serif";
           ctx.fillText("C 切換武器　P 提升等級　W 換武器　B 炸彈", W / 2, H * 0.63);
@@ -1333,6 +1408,9 @@
         input.focus();
       }
       if (!showName) state.nameFocused = false;
+      const touchUi = document.getElementById("touch-ui");
+      touchUi.classList.toggle("on", useTouch && state.mode === "play" && !state.naming);
+      document.getElementById("btn-pause").textContent = state.paused ? "繼續" : "暫停";
     }
 
     function drawBoard(startY, limit) {
@@ -1378,6 +1456,10 @@
       armMusic();
       keys.add(k);
       if (k === "m" && !e.repeat) toggleMusic();
+      if ((k === "p" || k === "escape") && !e.repeat) {
+        e.preventDefault();
+        togglePause();
+      }
       if ((k === "enter" || k === " ") && state.mode !== "play" && !state.naming) {
         resetRun();
         state.mode = "play";
@@ -1386,13 +1468,73 @@
       if (k === "c" && !e.repeat && state.mode === "play") cycleWeapon();
     });
     addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
-    canvas.addEventListener("pointerdown", () => {
+    canvas.addEventListener("pointerdown", (event) => {
       armMusic();
-      if (state.mode !== "play" && !state.naming) {
+      if (state.naming) return;
+      if (state.mode !== "play") {
         resetRun();
         state.mode = "play";
+        return;
       }
+      if (state.paused) {
+        state.paused = false;
+        return;
+      }
+      if (!useTouch || touch.id !== null) return;
+      const point = canvasPoint(event);
+      touch.id = event.pointerId;
+      touch.ox = point.x;
+      touch.oy = point.y;
+      touch.px = player.x;
+      touch.py = player.y;
+      canvas.setPointerCapture(event.pointerId);
     });
+    canvas.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== touch.id || state.paused) return;
+      const point = canvasPoint(event);
+      player.x = Math.max(52, Math.min(W - 52, touch.px + point.x - touch.ox));
+      player.y = Math.max(90, Math.min(H - 64, touch.py + point.y - touch.oy));
+      player.bank = Math.max(-0.4, Math.min(0.4, (point.x - touch.ox) * -0.004));
+    });
+    function endDrag(event) {
+      if (event.pointerId !== touch.id) return;
+      touch.id = null;
+      player.bank = 0;
+    }
+    canvas.addEventListener("pointerup", endDrag);
+    canvas.addEventListener("pointercancel", endDrag);
+    document.getElementById("btn-pause").addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      armMusic();
+      togglePause();
+    });
+    document.getElementById("btn-bomb").addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      armMusic();
+      bomb();
+    });
+    document.getElementById("btn-weapon").addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      armMusic();
+      if (state.mode === "play") cycleWeapon();
+    });
+    document.getElementById("btn-music").addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleMusic();
+    });
+    const slowButton = document.getElementById("btn-slow");
+    slowButton.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      touch.slow = true;
+    });
+    slowButton.addEventListener("pointerup", () => { touch.slow = false; });
+    slowButton.addEventListener("pointercancel", () => { touch.slow = false; });
+    slowButton.addEventListener("pointerleave", () => { touch.slow = false; });
     document.getElementById("score-form").addEventListener("submit", (e) => {
       e.preventDefault();
       const name = document.getElementById("player-name").value.replace(/\s+/g, " ").trim().slice(0, 8);
