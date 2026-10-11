@@ -37,19 +37,60 @@
       position: absolute;
       left: 0;
       right: 0;
-      bottom: 10px;
+      bottom: 28px;
       text-align: center;
       font-size: 12px;
       letter-spacing: 0.04em;
       color: rgba(244, 241, 232, 0.55);
       pointer-events: none;
     }
+    .credit {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 8px;
+      text-align: center;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      color: rgba(255, 226, 122, 0.82);
+      pointer-events: none;
+    }
+    #score-form {
+      display: none;
+      position: absolute;
+      left: 50%;
+      top: 47%;
+      transform: translate(-50%, -50%);
+      width: min(260px, 80%);
+      gap: 8px;
+      z-index: 2;
+    }
+    #score-form.show { display: grid; }
+    #score-form input,
+    #score-form button {
+      font: 16px "Segoe UI", "Microsoft JhengHei", sans-serif;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    #score-form input { background: #f4f1e8; color: #1a1408; }
+    #score-form button {
+      background: #ffe27a;
+      color: #1a1408;
+      font-weight: 700;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <div class="stage">
     <canvas id="game" width="540" height="960"></canvas>
-    <div class="hud-hint">方向鍵 / WASD 移動　Shift 精密操作　空白鍵射擊　C 換武器　X 炸彈</div>
+    <div class="hud-hint">方向鍵 / WASD 移動　Shift 精密操作　空白鍵射擊　C 換武器　X 炸彈　M 音樂</div>
+    <div class="credit">此為 Kevin Liao 製作　如要轉載請註明</div>
+    <form id="score-form">
+      <input id="player-name" maxlength="8" placeholder="輸入名字" autocomplete="nickname" />
+      <button type="submit">登上排行榜</button>
+    </form>
   </div>
   <script>
     const canvas = document.getElementById("game");
@@ -102,6 +143,7 @@
       warn: 0,
       message: "",
       messageT: 0,
+      naming: false,
     };
 
     const player = {
@@ -134,12 +176,21 @@
       });
     }
 
-    function beep(freq, dur, type = "square", gain = 0.04) {
+    const music = { armed: false, muted: false, master: null, next: 0, step: 0 };
+    const BASS = [45, 0, 45, 0, 52, 0, 52, 0, 50, 0, 50, 0, 45, 0, 45, 0, 48, 0, 48, 0, 43, 0, 43, 0, 52, 0, 47, 0, 45, 0, 40, 0];
+    const LEAD = [0, 76, 0, 74, 72, 0, 74, 76, 0, 79, 0, 76, 74, 0, 72, 69, 0, 72, 74, 0, 76, 0, 74, 72, 0, 69, 72, 0, 76, 79, 76, 72];
+
+    function audioCtx() {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
+      if (!AudioCtx) return null;
       if (!beep.ctx) beep.ctx = new AudioCtx();
-      const ctxA = beep.ctx;
-      if (ctxA.state === "suspended") ctxA.resume();
+      if (beep.ctx.state === "suspended") beep.ctx.resume();
+      return beep.ctx;
+    }
+
+    function beep(freq, dur, type = "square", gain = 0.04) {
+      const ctxA = audioCtx();
+      if (!ctxA) return;
       const osc = ctxA.createOscillator();
       const g = ctxA.createGain();
       osc.type = type;
@@ -150,6 +201,74 @@
       g.connect(ctxA.destination);
       osc.start();
       osc.stop(ctxA.currentTime + dur);
+    }
+
+    function armMusic() {
+      const ctxA = audioCtx();
+      if (!ctxA) return;
+      music.armed = true;
+      if (!music.master) {
+        music.master = ctxA.createGain();
+        music.master.gain.value = music.muted ? 0 : 0.9;
+        music.master.connect(ctxA.destination);
+        music.next = ctxA.currentTime + 0.06;
+      }
+    }
+
+    function playTone(midi, time, dur, type, peak) {
+      const ctxA = beep.ctx;
+      const osc = ctxA.createOscillator();
+      const g = ctxA.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(440 * 2 ** ((midi - 69) / 12), time);
+      g.gain.setValueAtTime(0.0001, time);
+      g.gain.exponentialRampToValueAtTime(peak, time + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+      osc.connect(g);
+      g.connect(music.master);
+      osc.start(time);
+      osc.stop(time + dur + 0.02);
+    }
+
+    function playHat(time) {
+      const ctxA = beep.ctx;
+      const count = 700;
+      const buffer = ctxA.createBuffer(1, count, ctxA.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < count; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / count);
+      const src = ctxA.createBufferSource();
+      const g = ctxA.createGain();
+      src.buffer = buffer;
+      g.gain.setValueAtTime(0.03, time);
+      g.gain.exponentialRampToValueAtTime(0.0001, time + 0.04);
+      src.connect(g);
+      g.connect(music.master);
+      src.start(time);
+    }
+
+    function musicPump() {
+      if (!music.armed || !music.master || music.muted) return;
+      const ctxA = beep.ctx;
+      const ahead = ctxA.currentTime + 0.28;
+      const stepDur = 60 / 116 / 2;
+      let guard = 0;
+      while (music.next < ahead && guard++ < 8) {
+        const i = music.step % 32;
+        if (BASS[i]) playTone(BASS[i], music.next, 0.16, "square", 0.04);
+        if (LEAD[i]) playTone(LEAD[i], music.next, 0.22, "triangle", 0.028);
+        if (i % 2 === 0) playHat(music.next);
+        music.step += 1;
+        music.next += stepDur;
+      }
+    }
+
+    function toggleMusic() {
+      armMusic();
+      music.muted = !music.muted;
+      if (!music.master) return;
+      const ctxA = beep.ctx;
+      music.master.gain.setTargetAtTime(music.muted ? 0.0001 : 0.9, ctxA.currentTime, 0.04);
+      if (!music.muted && music.next < ctxA.currentTime) music.next = ctxA.currentTime + 0.05;
     }
 
     function boom(power) {
@@ -168,6 +287,23 @@
         state.best = state.score;
         localStorage.setItem("little-bee-best", String(state.best));
       }
+    }
+
+    function readBoard() {
+      try {
+        const list = JSON.parse(localStorage.getItem("little-bee-board") || "[]");
+        if (!Array.isArray(list)) return [];
+        return list.filter((row) => row && typeof row.name === "string" && typeof row.score === "number").slice(0, 10);
+      } catch {
+        return [];
+      }
+    }
+
+    function endRun(mode) {
+      state.mode = mode;
+      saveBest();
+      state.naming = state.score > 0;
+      state.nameFocused = false;
     }
 
     function resetRun() {
@@ -192,6 +328,7 @@
       state.hitstop = 0;
       state.warn = 0;
       state.message = "";
+      state.naming = false;
       player.x = W / 2;
       player.y = H - 150;
       player.cool = 0;
@@ -387,10 +524,7 @@
       state.hitstop = 0.07;
       explode(player.x, player.y, 2);
       beep(110, 0.22, "triangle", 0.07);
-      if (state.lives <= 0) {
-        state.mode = "over";
-        saveBest();
-      }
+      if (state.lives <= 0) endRun("over");
     }
 
     function finishFoe(f) {
@@ -674,8 +808,7 @@
               state.bossAlive = false;
               foes.splice(i, 1);
               if (state.stage >= STAGES.length - 1) {
-                state.mode = "win";
-                saveBest();
+                endRun("win");
               } else {
                 state.intermission = 2.3;
               }
@@ -1161,45 +1294,91 @@
         ctx.fillRect(0, 0, W, H);
         ctx.textAlign = "center";
         ctx.fillStyle = "#ffe27a";
-        ctx.font = "bold 52px sans-serif";
-        ctx.fillText(state.mode === "win" ? "艦隊肅清" : "小蜜蜂雷電", W / 2, H * 0.32);
+        ctx.font = "bold 46px sans-serif";
+        ctx.fillText(state.mode === "win" ? "艦隊肅清" : state.mode === "over" ? "機體墜毀" : "小蜜蜂雷電", W / 2, H * 0.16);
         ctx.fillStyle = "#f4f1e8";
-        ctx.font = "20px sans-serif";
+        ctx.font = "18px sans-serif";
         if (state.mode === "over") {
-          ctx.fillText("停在第 " + (state.stage + 1) + " 關", W / 2, H * 0.4);
-          ctx.fillText("SCORE  " + state.score, W / 2, H * 0.46);
+          ctx.fillText("停在第 " + (state.stage + 1) + " 關　" + state.score + " 分", W / 2, H * 0.21);
         } else if (state.mode === "win") {
-          ctx.fillText("五關首領全部擊破", W / 2, H * 0.4);
-          ctx.fillText("SCORE  " + state.score, W / 2, H * 0.46);
+          ctx.fillText("五關清空　" + state.score + " 分", W / 2, H * 0.21);
         } else {
-          ctx.fillText("五關討伐，擊破每一艘旗艦", W / 2, H * 0.4);
+          ctx.fillText("五關討伐，擊破每一艘旗艦", W / 2, H * 0.21);
         }
-        ctx.fillStyle = "#9ee7ff";
-        ctx.fillText("按 Enter 或點擊開始", W / 2, H * 0.56);
-        ctx.fillStyle = "rgba(244,241,232,0.75)";
-        ctx.font = "16px sans-serif";
-        ctx.fillText("C 切換武器　P 提升等級　W 換武器　B 炸彈", W / 2, H * 0.62);
-        drawFighter(W / 2, H * 0.76, 1.8, Math.sin(performance.now() / 500) * 0.12, 0.04);
+        if (state.naming) {
+          ctx.fillStyle = "#9ee7ff";
+          ctx.font = "18px sans-serif";
+          ctx.fillText("留下名字，登上排行榜", W / 2, H * 0.4);
+        } else {
+          drawBoard(H * 0.28, 5);
+          ctx.fillStyle = "#9ee7ff";
+          ctx.font = "20px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("按 Enter 或點擊開始", W / 2, H * 0.58);
+          ctx.fillStyle = "rgba(244,241,232,0.75)";
+          ctx.font = "16px sans-serif";
+          ctx.fillText("C 切換武器　P 提升等級　W 換武器　B 炸彈", W / 2, H * 0.63);
+          drawFighter(W / 2, H * 0.78, 1.45, Math.sin(performance.now() / 500) * 0.12, 0.04);
+        }
       }
 
       ctx.restore();
+      const form = document.getElementById("score-form");
+      const showName = state.naming && (state.mode === "over" || state.mode === "win");
+      form.classList.toggle("show", showName);
+      if (showName && !state.nameFocused) {
+        state.nameFocused = true;
+        const input = document.getElementById("player-name");
+        if (!input.value) input.value = localStorage.getItem("little-bee-name") || "";
+        input.focus();
+      }
+      if (!showName) state.nameFocused = false;
     }
 
+    function drawBoard(startY, limit) {
+      const list = readBoard().slice(0, limit);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffe27a";
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillText("排行榜", W / 2, startY);
+      if (!list.length) {
+        ctx.fillStyle = "rgba(244,241,232,0.75)";
+        ctx.font = "16px sans-serif";
+        ctx.fillText("打完一局，留下名字", W / 2, startY + 28);
+        return;
+      }
+      list.forEach((row, i) => {
+        const y = startY + 30 + i * 24;
+        ctx.font = "16px sans-serif";
+        ctx.fillStyle = i === 0 ? "#ffe27a" : "#f4f1e8";
+        ctx.textAlign = "right";
+        ctx.fillText(String(i + 1), W / 2 - 96, y);
+        ctx.textAlign = "left";
+        ctx.fillText(row.name, W / 2 - 82, y);
+        ctx.textAlign = "right";
+        ctx.fillText(String(row.score), W / 2 + 124, y);
+      });
+      ctx.textAlign = "center";
+    }
     let last = performance.now();
     function frame(now) {
       const dt = Math.min(0.033, (now - last) / 1000);
       last = now;
       update(dt);
+      musicPump();
       draw();
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
 
     addEventListener("keydown", (e) => {
+      if (e.target.closest && e.target.closest("#score-form")) return;
       const k = e.key.toLowerCase();
       if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
+      armMusic();
       keys.add(k);
-      if ((k === "enter" || k === " ") && state.mode !== "play") {
+      if (k === "m" && !e.repeat) toggleMusic();
+      if ((k === "enter" || k === " ") && state.mode !== "play" && !state.naming) {
         resetRun();
         state.mode = "play";
       }
@@ -1208,10 +1387,25 @@
     });
     addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
     canvas.addEventListener("pointerdown", () => {
-      if (state.mode !== "play") {
+      armMusic();
+      if (state.mode !== "play" && !state.naming) {
         resetRun();
         state.mode = "play";
       }
+    });
+    document.getElementById("score-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = document.getElementById("player-name").value.replace(/\s+/g, " ").trim().slice(0, 8);
+      if (!name || !state.naming) return;
+      const scores = new Map(readBoard().map((row) => [row.name, row.score]));
+      scores.set(name, Math.max(state.score, scores.get(name) || 0));
+      const list = [...scores.entries()]
+        .map(([entryName, score]) => ({ name: entryName, score }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10);
+      localStorage.setItem("little-bee-board", JSON.stringify(list));
+      localStorage.setItem("little-bee-name", name);
+      state.naming = false;
     });
     addEventListener("blur", () => keys.clear());
   </script>
